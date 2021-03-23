@@ -21,12 +21,14 @@ type legacyManager struct {
 	mu      sync.Mutex
 	cgroups *configs.Cgroup
 	paths   map[string]string
+	dbus    *dbusConnManager
 }
 
 func NewLegacyManager(cg *configs.Cgroup, paths map[string]string) cgroups.Manager {
 	return &legacyManager{
 		cgroups: cg,
 		paths:   paths,
+		dbus:    newDbusConnManager(false),
 	}
 }
 
@@ -167,7 +169,7 @@ func (m *legacyManager) Apply(pid int) error {
 	properties = append(properties,
 		newProp("DefaultDependencies", false))
 
-	dbusConnection, err := getDbusConnection(false)
+	dbusConnection, err := m.dbus.getConnection()
 	if err != nil {
 		return err
 	}
@@ -187,6 +189,7 @@ func (m *legacyManager) Apply(pid int) error {
 	}
 
 	if err := startUnit(dbusConnection, unitName, properties); err != nil {
+		m.dbus.checkAndReconnect(dbusConnection, err)
 		return err
 	}
 
@@ -217,7 +220,7 @@ func (m *legacyManager) Destroy() error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	dbusConnection, err := getDbusConnection(false)
+	dbusConnection, err := m.dbus.getConnection()
 	if err != nil {
 		return err
 	}
@@ -374,7 +377,7 @@ func (m *legacyManager) Set(container *configs.Config) error {
 	if m.cgroups.Paths != nil {
 		return nil
 	}
-	dbusConnection, err := getDbusConnection(false)
+	dbusConnection, err := m.dbus.getConnection()
 	if err != nil {
 		return err
 	}
@@ -407,6 +410,7 @@ func (m *legacyManager) Set(container *configs.Config) error {
 	}
 
 	if err := dbusConnection.SetUnitProperties(getUnitName(container.Cgroups), true, properties...); err != nil {
+		m.dbus.checkAndReconnect(dbusConnection, err)
 		_ = m.Freeze(targetFreezerState)
 		return err
 	}
