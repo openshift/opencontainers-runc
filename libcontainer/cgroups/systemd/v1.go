@@ -70,7 +70,7 @@ var legacySubsystems = subsystemSet{
 	&fs.NameGroup{GroupName: "name=systemd"},
 }
 
-func genV1ResourcesProperties(c *configs.Cgroup, conn *systemdDbus.Conn) ([]systemdDbus.Property, error) {
+func genV1ResourcesProperties(c *configs.Cgroup, cm *dbusConnManager) ([]systemdDbus.Property, error) {
 	var properties []systemdDbus.Property
 	r := c.Resources
 
@@ -90,7 +90,7 @@ func genV1ResourcesProperties(c *configs.Cgroup, conn *systemdDbus.Conn) ([]syst
 			newProp("CPUShares", r.CpuShares))
 	}
 
-	addCpuQuota(conn, &properties, r.CpuQuota, r.CpuPeriod)
+	addCpuQuota(cm, &properties, r.CpuQuota, r.CpuPeriod)
 
 	if r.BlkioWeight != 0 {
 		properties = append(properties,
@@ -169,11 +169,7 @@ func (m *legacyManager) Apply(pid int) error {
 	properties = append(properties,
 		newProp("DefaultDependencies", false))
 
-	dbusConnection, err := m.dbus.getConnection()
-	if err != nil {
-		return err
-	}
-	resourcesProperties, err := genV1ResourcesProperties(c, dbusConnection)
+	resourcesProperties, err := genV1ResourcesProperties(c, m.dbus)
 	if err != nil {
 		return err
 	}
@@ -188,8 +184,7 @@ func (m *legacyManager) Apply(pid int) error {
 		}
 	}
 
-	if err := startUnit(dbusConnection, unitName, properties); err != nil {
-		m.dbus.checkAndReconnect(dbusConnection, err)
+	if err := startUnit(m.dbus, unitName, properties); err != nil {
 		return err
 	}
 
@@ -220,13 +215,7 @@ func (m *legacyManager) Destroy() error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	dbusConnection, err := m.dbus.getConnection()
-	if err != nil {
-		return err
-	}
-	unitName := getUnitName(m.cgroups)
-
-	err = stopUnit(dbusConnection, unitName)
+	err := stopUnit(m.dbus, getUnitName(m.cgroups))
 	// Both on success and on error, cleanup all the cgroups we are aware of.
 	// Some of them were created directly by Apply() and are not managed by systemd.
 	if err := cgroups.RemovePaths(m.paths); err != nil {
@@ -377,11 +366,7 @@ func (m *legacyManager) Set(container *configs.Config) error {
 	if m.cgroups.Paths != nil {
 		return nil
 	}
-	dbusConnection, err := m.dbus.getConnection()
-	if err != nil {
-		return err
-	}
-	properties, err := genV1ResourcesProperties(container.Cgroups, dbusConnection)
+	properties, err := genV1ResourcesProperties(container.Cgroups, m.dbus)
 	if err != nil {
 		return err
 	}
@@ -409,8 +394,7 @@ func (m *legacyManager) Set(container *configs.Config) error {
 		}
 	}
 
-	if err := dbusConnection.SetUnitProperties(getUnitName(container.Cgroups), true, properties...); err != nil {
-		m.dbus.checkAndReconnect(dbusConnection, err)
+	if err := setUnitProperties(m.dbus, getUnitName(container.Cgroups), properties...); err != nil {
 		_ = m.Freeze(targetFreezerState)
 		return err
 	}
